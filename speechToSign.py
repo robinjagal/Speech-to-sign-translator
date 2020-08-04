@@ -2,25 +2,30 @@ import boto3
 from io import BytesIO
 import matplotlib.image as mpimg
 import matplotlib.pyplot as plt
-import numpy as np
-import speech_recognition as sr
-import matplotlib.pyplot as plt
-import numpy as np
-from PIL import Image
 import pyglet
+import speech_recognition as sr
+import pyrebase
 
 arr = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r',
        's', 't', 'u', 'v', 'w', 'x', 'y', 'z']
+
+firebaseConfig = {
+   #Contains API info
+}
+
+firebase = pyrebase.initialize_app(firebaseConfig)
 
 BUCKET_NAME = 'signtranslator'  # replace with your bucket name
 s3 = boto3.client('s3')
 m = sr.Recognizer()
 resource = boto3.resource('s3')
 
-class globaluser:
+
+class guestUser:
+    folder = ""
     bucket = resource.Bucket(BUCKET_NAME)
     KEY = ""
-    text_input = []
+    text_input = ""
     dir_letters = 'common/letters/'
 
     def show_image(self, image_object, type):
@@ -30,7 +35,7 @@ class globaluser:
 
     def show_letters(self, text):
         for i in range(len(text)):
-            if (text[i] in arr):
+            if text[i] in arr:
                 address = self.dir_letters + text[i] + '.jpg'
                 try:
                     image_object = self.bucket.Object(address)
@@ -38,7 +43,7 @@ class globaluser:
 
                 except Exception as e:
                     print(e)
-            elif (text[i] == '.' or text[i] == ' '):
+            elif text[i] == '.' or text[i] == ' ':
                 plt.pause(0.1)
                 plt.close()
             else:
@@ -57,14 +62,26 @@ class globaluser:
 
         pyglet.app.run()
 
-    def get_objects(self, filename):
-        self.KEY += filename  # replace with your object key
-        image_object = self.bucket.Object(self.KEY)
-        type = "gif"
+    def direct_show_sign(self, image_object):  # Doesnt work
+        file_data = image_object.get()['Body'].read()
+        '''image = mpimg.imread(BytesIO(image_object.get()['Body'].read()), 'gif')    #This only shows single frame
+        imgplot = plt.imshow(image)
+        plt.show(imgplot)
+        '''
+        self.show_gif(file_data)
+        print(type(file_data))
+
+    def get_objects(self):
         try:
-            self.showsign(image_object, type)
+            self.listen_input()
         except:
-            print("The object does not exist.")
+            print("Try again")
+            return
+        self.KEY += self.text_input
+        try:
+            self.show_letters(self.text_input)
+        except:
+            print("Token may have expired, try again ")
 
     def put_objects(self, dir):
         client = boto3.client('s3')
@@ -81,26 +98,43 @@ class globaluser:
         try:
             self.text_input = m.recognize_google(get)
             print('You said ' + self.text_input)
-
         except Exception:
             print('Could not recognise')
 
 
-class loggedUser(globaluser):
+class registeredUser(guestUser):
     def __init__(self, name):
         self.folder = name + '/'
 
-    def get_objects(self, text_input):
-        # self.listen_input()
-        self.KEY = self.folder + text_input  # replace with your object key
-        image_object = self.bucket.Object(self.KEY)
+    def get_objects(self):
         try:
-            resource.Bucket(BUCKET_NAME).download_file(self.KEY + ".gif", 'my_image.gif')
+            self.listen_input()
+        except:
+            print("Try again")
+            return
+        self.KEY = self.folder + self.text_input + ".gif"
+        choice = 0
+        # image_object = self.bucket.Object(self.KEY)
+        try:
+            resource.Bucket(BUCKET_NAME).download_file(self.KEY, 'my_image.gif')  # To download gif from cloud
             self.show_gif('my_image.gif')
+            choice = 0
 
         except:
-            print("The object does not exist.")
-            self.show_letters(text_input)
+            choice = 1
+
+        if choice == 1:
+            try:
+                self.show_letters(self.text_input)
+            except:
+                print("Token may have expired, try again ")
+
+    def put_object(self, filedir):
+        dir = self.folder + filedir
+        client = boto3.client('s3')
+        client.upload_file(filedir, BUCKET_NAME, dir)
+
+class admin(guestUser):
 
     def put_object(self, filedir):
         dir = self.folder + filedir
@@ -108,10 +142,70 @@ class loggedUser(globaluser):
         client.upload_file(filedir, BUCKET_NAME, dir)
 
 
+class system:
+    username = ""
+    password = ""
+    auth = firebase.auth()
+
+    def sign_in(self):
+        self.username = input("Enter your email: ")
+        self.password = input("Enter your password: ")
+        choice = 3
+        try:
+            self.user = self.auth.sign_in_with_email_and_password(self.username, self.password)
+            print("Logged-in successfully")
+            return registeredUser(self.username.partition('@')[0])
+        except:
+            choice = int(input("Wrong password:\n 1. Try again\n 2. Register\n 3. Login as guest user\n"))
+
+        if choice == 1:
+            return self.sign_in()
+        elif choice == 2:
+            obj = self.sign_up()
+            return obj
+        elif choice == 3:
+            return guestUser()
+
+    def sign_up(self):
+        print("Register user")
+        self.username = input("Enter your email: ")
+        self.password = input("Enter your password: ")
+        try:
+            self.user = self.auth.create_user_with_email_and_password(self.username, self.password)
+            print("User registered successfully")
+            return registeredUser(self.username.partition('@')[0])
+        except:
+            print("Already registered user")
+            return -1
+
 def main():
-    u1 = loggedUser("user1")
-    text = input("Enter text you want to find: ")
-    u1.get_objects(text)
+    u1 = system()
+
+    choice = int(input("Already registered ? \n 1.Yes \n 2.No \n 3.Exit \n "))
+    obj = -1
+    if choice == 1:
+        obj = u1.sign_in()
+    elif choice == 2:
+        choice2 = int(input("Login as guest ? \n 1.Yes \n 2.No \n 3.Exit \n"))
+
+        if choice2 == 1:
+            print("Logged in as guest")
+            obj = guestUser()
+        elif choice2 == 2:
+            obj = u1.sign_up()
+        else:
+            print("Error occurred")
+    else:
+        print("Try again")
+
+    if obj != -1:
+        choice3 = int(input(" 1.Speech to sign translation \n 2.Add signs to database \n 3.Exit \n"))
+        if choice3 == 1:
+            obj.get_objects()
+        elif choice3 == 2:
+            print("Function not available yet")
+    else:
+        print("Not a valid user")
 
 
 if __name__ == "__main__":
